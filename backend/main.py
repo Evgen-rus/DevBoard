@@ -15,11 +15,13 @@ from starlette.middleware.sessions import SessionMiddleware
 from auth import require_auth
 from github_client import LABEL_COLORS, GitHubClient, GitHubError
 from mapping import (
+    ARCHIVED_LABEL,
     PRIORITIES,
     STATUSES,
     github_state_for_status,
     issue_to_task,
     labels_for_update,
+    labels_for_archive,
     parse_task_id,
     render_issue_body,
     required_labels,
@@ -88,6 +90,7 @@ def bootstrap_labels(client: GitHubClient, projects: list[str]) -> None:
         ("priority:low", LABEL_COLORS["priority:low"], "DevBoard: low priority"),
         ("priority:medium", LABEL_COLORS["priority:medium"], "DevBoard: medium priority"),
         ("priority:high", LABEL_COLORS["priority:high"], "DevBoard: high priority"),
+        (ARCHIVED_LABEL, LABEL_COLORS[ARCHIVED_LABEL], "DevBoard: archived task"),
     ]
     for name in projects:
         specs.append((project_label(name), LABEL_COLORS["project"], f"DevBoard project {name}"))
@@ -200,8 +203,10 @@ def list_tasks(
     github: GitHubDep,
     settings: SettingsDep,
     project: str | None = None,
+    archived: bool = False,
 ) -> dict[str, Any]:
     tasks = [issue_to_task(issue, settings.devboard_id_prefix) for issue in github.list_issues()]
+    tasks = [task for task in tasks if task["archived"] is archived]
     if project and project != "all":
         tasks = [task for task in tasks if task["project"] == project]
     return {"tasks": tasks}
@@ -315,6 +320,45 @@ def patch_task(
     return {"task": issue_to_task(updated, settings.devboard_id_prefix)}
 
 
+def _set_task_archived(
+    task_id: str,
+    archived: bool,
+    github: GitHubClient,
+    settings: Settings,
+) -> dict[str, Any]:
+    number = parse_task_id(task_id, settings.devboard_id_prefix)
+    issue = github.get_issue(number)
+    existing_labels = [
+        label["name"] if isinstance(label, dict) else str(label)
+        for label in issue.get("labels") or []
+    ]
+    updated = github.update_issue(
+        number,
+        labels=labels_for_archive(existing_labels, archived),
+    )
+    return {"task": issue_to_task(updated, settings.devboard_id_prefix)}
+
+
+@app.post("/api/tasks/{task_id}/archive")
+def archive_task(
+    task_id: str,
+    _: AuthDep,
+    github: GitHubDep,
+    settings: SettingsDep,
+) -> dict[str, Any]:
+    return _set_task_archived(task_id, True, github, settings)
+
+
+@app.post("/api/tasks/{task_id}/restore")
+def restore_task(
+    task_id: str,
+    _: AuthDep,
+    github: GitHubDep,
+    settings: SettingsDep,
+) -> dict[str, Any]:
+    return _set_task_archived(task_id, False, github, settings)
+
+
 @app.get("/api/tasks/{task_id}/agent-context")
 def agent_context(
     task_id: str,
@@ -354,6 +398,7 @@ def agent_context(
         "comments": comments,
         "created_at": task["created_at"],
         "updated_at": task["updated_at"],
+        "archived": task["archived"],
         "agent_prompt": (
             f"Возьми {task['id']}, изучи задачу и текущий проект {task['project']}, "
             "составь план и реализуй."

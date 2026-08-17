@@ -31,6 +31,7 @@ STATUS_FROM_LABEL = {value: key for key, value in STATUS_LABEL.items()}
 PRIORITY_FROM_LABEL = {value: key for key, value in PRIORITY_LABEL.items()}
 
 PROJECT_LABEL_PREFIX = "project:"
+ARCHIVED_LABEL = "devboard:archived"
 META_START = "<!--devboard-meta"
 META_END = "-->"
 
@@ -146,6 +147,17 @@ def labels_for_update(
     return kept
 
 
+def labels_for_archive(existing: list[str], archived: bool) -> list[str]:
+    labels = [label for label in existing if label != ARCHIVED_LABEL]
+    if archived:
+        labels.append(ARCHIVED_LABEL)
+    return labels
+
+
+def archived_from_issue(issue: dict[str, Any]) -> bool:
+    return ARCHIVED_LABEL in _label_names(issue)
+
+
 def status_from_issue(issue: dict[str, Any]) -> Status:
     names = _label_names(issue)
     found = [STATUS_FROM_LABEL[name] for name in names if name in STATUS_FROM_LABEL]
@@ -242,6 +254,7 @@ def issue_to_task(issue: dict[str, Any], prefix: str = "DEV") -> dict[str, Any]:
         "github_url": issue.get("html_url") or "",
         "comments_count": int(issue.get("comments") or 0),
         "closed": issue.get("state") == "closed",
+        "archived": archived_from_issue(issue),
     }
 
 

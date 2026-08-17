@@ -26,6 +26,7 @@ export type Task = {
   attachments: Attachment[]
   github_url: string
   comments_count: number
+  archived: boolean
   transcription_error?: string | null
 }
 
