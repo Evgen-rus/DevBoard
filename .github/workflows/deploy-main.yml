@@ -1,6 +1,9 @@
 name: Test and deploy main
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
