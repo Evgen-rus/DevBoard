@@ -71,8 +71,9 @@ def test_materialize_writes_json_and_files(devtask, tmp_path: Path) -> None:
     assert (task_dir / "voice.webm").read_bytes() == b"audio-bytes"
     saved = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
     assert saved["title"] == "Починить фильтр"
-    assert saved["attachments"][0]["local_path"] == ".devboard/DEV-52/shot.png"
-    assert saved["attachments"][1]["local_path"] == ".devboard/DEV-52/voice.webm"
+    assert saved["attachments"][0]["local_path"] == str((task_dir / "shot.png").resolve())
+    assert saved["attachments"][1]["local_path"] == str((task_dir / "voice.webm").resolve())
+    assert all(item["downloaded"] is True for item in saved["attachments"])
     assert "Починить" in (task_dir / "task.json").read_text(encoding="utf-8")
 
 
@@ -113,6 +114,34 @@ def test_materialize_without_attachments(devtask, tmp_path: Path) -> None:
     assert result["files"] == []
     saved = json.loads(result["task_json"].read_text(encoding="utf-8"))
     assert saved["attachments"] == []
+
+
+def test_materialize_can_skip_audio_but_keeps_metadata(devtask, tmp_path: Path) -> None:
+    requested: list[str] = []
+    result = devtask.materialize_context(
+        {
+            "id": "DEV-7",
+            "transcript": "Готовая расшифровка",
+            "attachments": [
+                {"filename": "shot.png", "kind": "image"},
+                {"filename": "voice.ogg", "kind": "audio"},
+            ],
+        },
+        dest_root=tmp_path / "cache",
+        download=lambda url: requested.append(url) or b"image",
+        base_url="https://board.example",
+        include_audio=False,
+    )
+    saved = json.loads(result["task_json"].read_text(encoding="utf-8"))
+    assert requested == ["https://board.example/api/tasks/DEV-7/attachments/shot.png"]
+    assert result["skipped"] == ["voice.ogg"]
+    assert saved["attachments"][1]["downloaded"] is False
+    assert saved["attachments"][1]["local_path"] is None
+
+
+def test_default_cache_root_uses_local_app_data(devtask, monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert devtask.default_cache_root() == tmp_path / "DevBoard" / "tasks"
 
 
 def test_parse_task_id_rejects_path(devtask) -> None:

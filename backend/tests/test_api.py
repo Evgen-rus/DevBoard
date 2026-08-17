@@ -141,7 +141,7 @@ def test_login_and_list_tasks(client) -> None:
 def test_agent_context_with_token(client) -> None:
     test_client, _fake = client
     response = test_client.get(
-        "/api/tasks/DEV-52/agent-context",
+        "/api/tasks/DEV-52/agent-context?public_url=https%3A%2F%2Ffresh.trycloudflare.com",
         headers={"Authorization": "Bearer test-token"},
     )
     assert response.status_code == 200
@@ -149,7 +149,20 @@ def test_agent_context_with_token(client) -> None:
     assert payload["id"] == "DEV-52"
     assert payload["transcript"] == "Расшифровка голоса"
     assert payload["project"] == "NeuroROP"
+    assert payload["agent_prompt"].startswith("$devboard-task\n\n")
     assert "Возьми DEV-52" in payload["agent_prompt"]
+    assert "https://fresh.trycloudflare.com" in payload["agent_prompt"]
+    assert "Проект задачи: NeuroROP" in payload["agent_prompt"]
+    assert "Ничего не изменяй до моего явного разрешения" in payload["agent_prompt"]
+
+
+def test_agent_context_rejects_invalid_public_url(client) -> None:
+    test_client, _fake = client
+    response = test_client.get(
+        "/api/tasks/DEV-52/agent-context?public_url=javascript%3Aalert(1)",
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 422
 
 
 def test_create_task_and_status_change(client) -> None:

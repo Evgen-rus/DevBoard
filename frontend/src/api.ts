@@ -66,6 +66,13 @@ export function getTask(id: string) {
   return request<{ task: Task }>(`/api/tasks/${encodeURIComponent(id)}`)
 }
 
+export function getAgentContext(id: string) {
+  const query = new URLSearchParams({ public_url: window.location.origin })
+  return request<{ agent_prompt: string }>(
+    `/api/tasks/${encodeURIComponent(id)}/agent-context?${query.toString()}`,
+  )
+}
+
 export function createTask(input: {
   project: string
   title: string

@@ -6,6 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -63,6 +64,32 @@ class TaskPatch(BaseModel):
 
 class CommentBody(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
+
+
+def build_agent_prompt(task: dict[str, Any], devboard_url: str) -> str:
+    return (
+        "$devboard-task\n\n"
+        f"Возьми {task['id']} из DevBoard: {devboard_url.rstrip('/')}.\n"
+        f"Проект задачи: {task['project']}. Работай в текущем репозитории. "
+        "Сначала изучи задачу, доступные вложения и текущий проект, затем обсуди "
+        "со мной понимание, вопросы и план. Ничего не изменяй до моего явного разрешения."
+    )
+
+
+def resolve_public_url(public_url: str | None, request: Request) -> str:
+    candidate = public_url or str(request.base_url)
+    parsed = urlsplit(candidate)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise HTTPException(status_code=422, detail="Некорректный публичный адрес DevBoard")
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def get_github(settings: SettingsDep):
@@ -362,9 +389,11 @@ def restore_task(
 @app.get("/api/tasks/{task_id}/agent-context")
 def agent_context(
     task_id: str,
+    request: Request,
     _: AuthDep,
     github: GitHubDep,
     settings: SettingsDep,
+    public_url: str | None = None,
 ) -> dict[str, Any]:
     number = parse_task_id(task_id, settings.devboard_id_prefix)
     issue = github.get_issue(number)
@@ -399,10 +428,7 @@ def agent_context(
         "created_at": task["created_at"],
         "updated_at": task["updated_at"],
         "archived": task["archived"],
-        "agent_prompt": (
-            f"Возьми {task['id']}, изучи задачу и текущий проект {task['project']}, "
-            "составь план и реализуй."
-        ),
+        "agent_prompt": build_agent_prompt(task, resolve_public_url(public_url, request)),
     }
 
 

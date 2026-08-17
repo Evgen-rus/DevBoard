@@ -26,7 +26,7 @@ DevBoard — внутренний task board для агентной разра�
 | Транскрибация | `backend/transcription.py` |
 | Пароль UI и токен агента | `backend/auth.py`, `backend/settings.py` |
 | Browser UI и клиентский контракт | `frontend/src/App.tsx`, `frontend/src/Board.tsx`, `frontend/src/api.ts` |
-| Контекст для coding agent | `GET /api/tasks/{id}/agent-context`, `cli/devtask.py` |
+| Контекст для coding agent | `GET /api/tasks/{id}/agent-context`, `cli/devtask.py`, `.agents/skills/devboard-task/SKILL.md` |
 
 `README.md` описывает только быстрый запуск. Операционные детали запуска не должны дублироваться здесь.
 
@@ -67,9 +67,9 @@ DevBoard — внутренний task board для агентной разра�
 
 ### 4. Контекст для агента
 
-`GET /api/tasks/DEV-52/agent-context` и `python cli/devtask.py get DEV-52` отдают нормализованный JSON: id, project, title, description, status, priority, transcript, attachments, comments. Агент разработки запускается снаружи, в репозитории проекта из поля `project`.
+`GET /api/tasks/DEV-52/agent-context` и `python cli/devtask.py get DEV-52` отдают нормализованный JSON: id, project, title, description, status, priority, transcript, attachments, comments. Кнопка «Промпт агенту» копирует короткий вызов пользовательского `$devboard-task` с актуальным URL открытого DevBoard. Skill загружает контекст и вложения, но сохраняет текущий репозиторий рабочим проектом и сначала проводит обсуждение без изменений.
 
-`python cli/devtask.py get DEV-52 --materialize` дополнительно скачивает вложения через тот же authenticated API и кладёт копию в `.devboard/DEV-52/` (task.json + файлы). Это локальный рабочий снимок для агента, не source of truth: байты по-прежнему живут в `storage/` DevBoard, задача — в GitHub Issue.
+`python cli/devtask.py get DEV-52 --materialize` дополнительно скачивает вложения через тот же authenticated API и кладёт копию в пользовательский кэш (`%LOCALAPPDATA%/DevBoard/tasks/DEV-52/` на Windows; путь можно заменить через `--dest-root`). Это локальный рабочий снимок для агента, не source of truth: байты по-прежнему живут в `storage/` DevBoard, задача — в GitHub Issue. `--skip-audio` сохраняет метаданные аудио, но не скачивает его, когда достаточно готовой транскрипции.
 
 ## Where to change code
 
@@ -82,7 +82,7 @@ DevBoard — внутренний task board для агентной разра�
 | Пароль, cookie, API-токен | `backend/auth.py`, `backend/settings.py` | `backend/main.py`, `frontend/src/api.ts` |
 | HTTP API | `backend/main.py` | `frontend/src/api.ts`, `cli/devtask.py` |
 | Канбан, форма задачи, запись голоса | `frontend/src/Board.tsx` | `frontend/src/api.ts`, `frontend/src/types.ts` |
-| CLI агента | `cli/devtask.py` | endpoint `agent-context` |
+| CLI или handoff агента | `cli/devtask.py`, `.agents/skills/devboard-task/SKILL.md` | endpoint `agent-context`, `frontend/src/Board.tsx`, `frontend/src/api.ts` |
 | Запуск Docker/VPS | `docker-compose.yml`, `backend/Dockerfile`, `frontend/Dockerfile` | `README.md`, `.env.example` |
 
 ## Интеграционные границы и данные
