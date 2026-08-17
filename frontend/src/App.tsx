@@ -49,8 +49,11 @@ export default function App() {
     return (
       <div className="login-wrap">
         <form className="login-card" onSubmit={onLogin}>
-          <h1>DevBoard</h1>
-          <p>Внутренняя доска задач для агентной разработки. Один общий пароль.</p>
+          <div className="brand">
+            <h1>DevBoard</h1>
+            <span>MadBoss</span>
+          </div>
+          <p>Один общий пароль.</p>
           <div className="field">
             <label htmlFor="password">Пароль</label>
             <input

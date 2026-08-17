@@ -9,6 +9,7 @@ __pycache__/
 backend/pytest-tmp/
 storage/*
 !storage/.gitkeep
+.devboard/
 backend/.venv/
 frontend/node_modules/
 frontend/dist/

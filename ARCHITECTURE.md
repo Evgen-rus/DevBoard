@@ -68,6 +68,8 @@ DevBoard — внутренний task board для агентной разра�
 
 `GET /api/tasks/DEV-52/agent-context` и `python cli/devtask.py get DEV-52` отдают нормализованный JSON: id, project, title, description, status, priority, transcript, attachments, comments. Агент разработки запускается снаружи, в репозитории проекта из поля `project`.
 
+`python cli/devtask.py get DEV-52 --materialize` дополнительно скачивает вложения через тот же authenticated API и кладёт копию в `.devboard/DEV-52/` (task.json + файлы). Это локальный рабочий снимок для агента, не source of truth: байты по-прежнему живут в `storage/` DevBoard, задача — в GitHub Issue.
+
 ## Where to change code
 
 | Задача | Первое место для проверки | Затронуть также, если меняется контракт |

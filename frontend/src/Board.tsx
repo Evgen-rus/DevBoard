@@ -12,12 +12,18 @@ import {
   transcribe,
 } from './api'
 import type { Comment, Priority, Status, Task } from './types'
-import { PRIORITIES, STATUSES } from './types'
+import { PRIORITIES, STATUSES, priorityTitle } from './types'
 
 type Props = { onLogout: () => void }
 
 const AGENT_PROMPT = (task: Task) =>
   `Возьми ${task.id}, изучи задачу и текущий проект, составь план и реализуй.`
+
+function cardExcerpt(task: Task): string {
+  const text = (task.description || '').replace(/\s+/g, ' ').trim()
+  if (!text || text === task.title.trim()) return ''
+  return text
+}
 
 export default function Board({ onLogout }: Props) {
   const [projects, setProjects] = useState<string[]>([])
@@ -27,7 +33,9 @@ export default function Board({ onLogout }: Props) {
   const [notice, setNotice] = useState('')
   const [doneOpen, setDoneOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [creatingProject, setCreatingProject] = useState(false)
   const [openedId, setOpenedId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<Status | null>(null)
 
   async function reload(selected = project) {
     const [projectData, taskData] = await Promise.all([listProjects(), listTasks(selected)])
@@ -51,26 +59,12 @@ export default function Board({ onLogout }: Props) {
     setTasks((current) => current.map((task) => (task.id === id ? result.task : task)))
   }
 
-  async function onCreateProject() {
-    const name = window.prompt('Название нового проекта')
-    if (!name) return
-    try {
-      const created = await createProject(name)
-      setProjects((current) => (current.includes(created.project) ? current : [...current, created.project]))
-      setProject(created.project)
-      await reload(created.project)
-      setNotice(`Проект ${created.project} создан`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось создать проект')
-    }
-  }
-
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
           <h1>DevBoard</h1>
-          <span>задачи для людей и агентов</span>
+          <span>MadBoss</span>
         </div>
         <div className="top-actions">
           <select
@@ -89,11 +83,11 @@ export default function Board({ onLogout }: Props) {
               </option>
             ))}
           </select>
-          <button className="btn secondary" type="button" onClick={onCreateProject}>
+          <button className="btn secondary" type="button" onClick={() => setCreatingProject(true)}>
             + Проект
           </button>
           <button className="btn" type="button" onClick={() => setCreating(true)}>
-            + New Task
+            + Новая задача
           </button>
           <button className="btn ghost" type="button" onClick={onLogout}>
             Выйти
@@ -109,36 +103,56 @@ export default function Board({ onLogout }: Props) {
           return (
             <section
               key={column.id}
-              className={`column ${column.id === 'done' ? 'done' : ''} ${collapsed ? 'collapsed' : ''}`}
-              onDragOver={(event) => event.preventDefault()}
+              className={`column ${column.id} ${items.length === 0 ? 'is-empty' : ''} ${collapsed ? 'collapsed' : ''} ${dropTarget === column.id ? 'drag-over' : ''}`}
+              onDragOver={(event) => {
+                event.preventDefault()
+                setDropTarget(column.id)
+              }}
               onDrop={(event) => {
+                event.preventDefault()
+                setDropTarget(null)
                 const id = event.dataTransfer.getData('text/plain')
                 if (id) changeStatus(id, column.id).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка'))
               }}
             >
               <div className="column-head">
-                <h2>
-                  {column.title}
-                  <small>{column.hint}</small>
-                </h2>
-                <span className="count">{items.length}</span>
+                <h2>{column.title}</h2>
+                <span className={`count ${column.id}`}>{items.length}</span>
               </div>
               {column.id === 'done' ? (
-                <button className="btn ghost" type="button" onClick={() => setDoneOpen((value) => !value)}>
-                  {doneOpen ? 'Свернуть Done' : 'Показать Done'}
+                <button className="btn secondary done-toggle" type="button" onClick={() => setDoneOpen((value) => !value)}>
+                  {doneOpen ? 'Свернуть' : 'Показать'}
                 </button>
               ) : null}
               {collapsed ? null : items.length === 0 ? (
-                <div className="empty">Пусто</div>
+                <div className="empty-slot">Нет задач</div>
               ) : (
                 items.map((task) => (
-                  <TaskCard key={task.id} task={task} onOpen={() => setOpenedId(task.id)} />
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    onOpen={() => setOpenedId(task.id)}
+                    onDragEnd={() => setDropTarget(null)}
+                  />
                 ))
               )}
             </section>
           )
         })}
       </main>
+      {creatingProject ? (
+        <NewProject
+          onClose={() => setCreatingProject(false)}
+          onCreated={async (name) => {
+            const created = await createProject(name)
+            setProjects((current) => (current.includes(created.project) ? current : [...current, created.project]))
+            setProject(created.project)
+            setCreatingProject(false)
+            setNotice(`Проект ${created.project} создан`)
+            await reload(created.project)
+          }}
+        />
+      ) : null}
       {creating ? (
         <NewTask
           projects={projects}
@@ -164,32 +178,113 @@ export default function Board({ onLogout }: Props) {
   )
 }
 
-function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
-  const images = task.attachments.filter((item) => item.kind === 'image').length
-  const audio = task.attachments.filter((item) => item.kind === 'audio').length
-  const files = task.attachments.filter((item) => item.kind === 'file').length
+function TaskCard({
+  task,
+  onOpen,
+  onDragEnd,
+}: {
+  task: Task
+  onOpen: () => void
+  onDragEnd: () => void
+}) {
+  const images = task.attachments.filter((item) => item.kind === 'image')
+  const audioCount = task.attachments.filter((item) => item.kind === 'audio').length
+  const fileCount = task.attachments.filter((item) => item.kind === 'file').length
+  const preview = images[0]
+  const excerpt = cardExcerpt(task)
+  const marks = [
+    audioCount ? `голос ${audioCount}` : '',
+    images.length ? `фото ${images.length}` : '',
+    fileCount ? `файл ${fileCount}` : '',
+    task.transcript ? 'текст' : '',
+    task.comments_count ? `коммент ${task.comments_count}` : '',
+  ].filter(Boolean)
   return (
     <button
       className="task-card"
       type="button"
       draggable
       onDragStart={(event) => event.dataTransfer.setData('text/plain', task.id)}
+      onDragEnd={onDragEnd}
       onClick={onOpen}
     >
-      <div className="task-id mono">{task.id}</div>
+      <div className="task-head">
+        <div className="task-id mono">{task.id}</div>
+        <span className={`pill ${task.priority}`}>
+          <span className={`priority-dot ${task.priority}`} />
+          {priorityTitle(task.priority)}
+        </span>
+      </div>
       <div className="task-title">{task.title}</div>
+      {excerpt ? <div className="task-excerpt">{excerpt}</div> : null}
+      {preview ? (
+        <img className="task-thumb" src={attachmentUrl(task.id, preview.filename)} alt="" />
+      ) : null}
       <div className="meta-row">
         <span className="pill project">{task.project}</span>
-        <span className={`pill ${task.priority}`}>{task.priority}</span>
       </div>
-      <div className="icon-row">
-        {audio ? <span>🎤 {audio}</span> : null}
-        {images ? <span>📷 {images}</span> : null}
-        {files ? <span>📎 {files}</span> : null}
-        {task.transcript ? <span>Aa</span> : null}
-        {task.status === 'done' ? <span>✓</span> : null}
-      </div>
+      {marks.length ? (
+        <div className="icon-row">
+          {marks.map((mark) => (
+            <span className="meta-chip" key={mark}>
+              {mark}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </button>
+  )
+}
+
+function NewProject({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void
+  onCreated: (name: string) => Promise<void>
+}) {
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault()
+    if (!name.trim()) return
+    setBusy(true)
+    setError('')
+    try {
+      await onCreated(name.trim())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось создать проект')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <form className="panel" onClick={(event) => event.stopPropagation()} onSubmit={onSubmit}>
+        <h2>Новый проект</h2>
+        <div className="field">
+          <label htmlFor="project-name">Название</label>
+          <input
+            id="project-name"
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Например, NeuroROP"
+          />
+        </div>
+        {error ? <div className="status-error">{error}</div> : null}
+        <div className="row-actions">
+          <button className="btn" type="submit" disabled={busy || !name.trim()}>
+            {busy ? 'Создаю…' : 'Создать'}
+          </button>
+          <button className="btn secondary" type="button" onClick={onClose}>
+            Отмена
+          </button>
+        </div>
+      </form>
+    </div>
   )
 }
 
@@ -215,6 +310,7 @@ function NewTask({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [transcribing, setTranscribing] = useState(false)
+  const [fileHover, setFileHover] = useState(false)
 
   function addFiles(list: FileList | File[]) {
     setFiles((current) => [...current, ...Array.from(list)])
@@ -282,7 +378,7 @@ function NewTask({
         <h2>Новая задача</h2>
         <p className="muted">Можно коротко текстом, скриншотами и голосом. Техническое ТЗ не обязательно.</p>
         <div className="field">
-          <label>Project</label>
+          <label>Проект</label>
           <select value={project} onChange={(event) => setProject(event.target.value)}>
             {(projects.includes(project) ? projects : [project, ...projects]).map((name) => (
               <option key={name} value={name}>
@@ -292,32 +388,35 @@ function NewTask({
           </select>
         </div>
         <div className="field">
-          <label>Title</label>
+          <label>Название</label>
           <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Можно оставить пустым" />
         </div>
         <div className="field">
-          <label>Description</label>
+          <label>Описание</label>
           <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Пара фраз своими словами" />
         </div>
         <div className="field">
-          <label>Attachments / Screenshots</label>
+          <label>Файлы и скриншоты</label>
           <div
-            className="dropzone"
-            onDragOver={(event) => event.preventDefault()}
+            className={`dropzone ${fileHover ? 'is-hover' : ''}`}
+            onDragOver={(event) => {
+              event.preventDefault()
+              setFileHover(true)
+            }}
+            onDragLeave={() => setFileHover(false)}
             onDrop={(event) => {
               event.preventDefault()
+              setFileHover(false)
               if (event.dataTransfer.files.length) addFiles(event.dataTransfer.files)
             }}
           >
-            Перетащите файлы сюда или выберите
-            <div className="row-actions">
-              <input type="file" multiple onChange={(event) => event.target.files && addFiles(event.target.files)} />
-            </div>
+            <div>Перетащите файлы сюда</div>
+            <FilePicker id="new-task-files" label="Выбрать файлы" multiple onFiles={addFiles} />
           </div>
-          <FileList files={files} />
+          <FilePreview files={files} />
         </div>
         <div className="field">
-          <label>Audio / Record voice</label>
+          <label>Голос</label>
           <div className="record-box">
             {recording ? <span className="rec-dot" /> : null}
             {recording ? (
@@ -329,11 +428,12 @@ function NewTask({
                 Записать голос
               </button>
             )}
-            <input
-              type="file"
+            <FilePicker
+              id="new-task-audio"
+              label="Загрузить аудио"
               accept="audio/*,video/webm"
-              onChange={(event) => {
-                const file = event.target.files?.[0]
+              onFiles={(list) => {
+                const file = list[0]
                 if (!file) return
                 addFiles([file])
                 transcribeFile(file).catch(() => undefined)
@@ -343,11 +443,11 @@ function NewTask({
           {transcribing ? <div className="muted">Расшифровываю аудио…</div> : null}
         </div>
         <div className="field">
-          <label>Transcript</label>
+          <label>Транскрипт</label>
           <textarea value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder="Появится после записи или загрузки аудио" />
         </div>
         <div className="field">
-          <label>Priority</label>
+          <label>Приоритет</label>
           <select value={priority} onChange={(event) => setPriority(event.target.value as Priority)}>
             {PRIORITIES.map((item) => (
               <option key={item.id} value={item.id}>
@@ -359,7 +459,7 @@ function NewTask({
         {error ? <div className="status-error">{error}</div> : null}
         <div className="row-actions">
           <button className="btn" type="submit" disabled={busy || !(title || description || files.length || transcript)}>
-            {busy ? 'Сохраняю…' : 'Create'}
+            {busy ? 'Сохраняю…' : 'Создать'}
           </button>
           <button className="btn secondary" type="button" onClick={onClose}>
             Отмена
@@ -436,11 +536,11 @@ function TaskDetail({
         {copied ? <div className="banner ok">{copied}</div> : null}
         {task.transcription_error ? <div className="status-error">{task.transcription_error}</div> : null}
         <div className="field">
-          <label>Title</label>
+          <label>Название</label>
           <input value={title} onChange={(event) => setTitle(event.target.value)} />
         </div>
         <div className="field">
-          <label>Project</label>
+          <label>Проект</label>
           <select value={project} onChange={(event) => setProject(event.target.value)}>
             {projects.map((name) => (
               <option key={name} value={name}>
@@ -450,7 +550,7 @@ function TaskDetail({
           </select>
         </div>
         <div className="field">
-          <label>Status</label>
+          <label>Статус</label>
           <select value={status} onChange={(event) => setStatus(event.target.value as Status)}>
             {STATUSES.map((item) => (
               <option key={item.id} value={item.id}>
@@ -460,7 +560,7 @@ function TaskDetail({
           </select>
         </div>
         <div className="field">
-          <label>Priority</label>
+          <label>Приоритет</label>
           <select value={priority} onChange={(event) => setPriority(event.target.value as Priority)}>
             {PRIORITIES.map((item) => (
               <option key={item.id} value={item.id}>
@@ -470,11 +570,11 @@ function TaskDetail({
           </select>
         </div>
         <div className="field">
-          <label>Description</label>
+          <label>Описание</label>
           <textarea value={description} onChange={(event) => setDescription(event.target.value)} />
         </div>
         <div className="field">
-          <label>Transcript</label>
+          <label>Транскрипт</label>
           <textarea value={transcript} onChange={(event) => setTranscript(event.target.value)} />
         </div>
         <div className="field attachments">
@@ -493,12 +593,12 @@ function TaskDetail({
               </a>
             </div>
           ))}
-          <input
-            type="file"
+          <FilePicker
+            id={`task-files-${task.id}`}
+            label="Добавить файлы"
             multiple
-            onChange={async (event) => {
-              if (!event.target.files?.length) return
-              const result = await addAttachments(task.id, Array.from(event.target.files))
+            onFiles={async (list) => {
+              const result = await addAttachments(task.id, Array.from(list))
               onChange(result.task)
             }}
           />
@@ -538,7 +638,40 @@ function TaskDetail({
   )
 }
 
-function FileList({ files }: { files: File[] }) {
+function FilePicker({
+  id,
+  label,
+  accept,
+  multiple,
+  onFiles,
+}: {
+  id: string
+  label: string
+  accept?: string
+  multiple?: boolean
+  onFiles: (files: FileList) => void
+}) {
+  return (
+    <>
+      <input
+        id={id}
+        className="file-input"
+        type="file"
+        accept={accept}
+        multiple={multiple}
+        onChange={(event) => {
+          if (event.target.files?.length) onFiles(event.target.files)
+          event.target.value = ''
+        }}
+      />
+      <label htmlFor={id} className="btn secondary">
+        {label}
+      </label>
+    </>
+  )
+}
+
+function FilePreview({ files }: { files: File[] }) {
   if (!files.length) return null
   return (
     <div className="preview-grid">

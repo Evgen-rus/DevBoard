@@ -36,15 +36,19 @@ export type Comment = {
   created_at: string
 }
 
-export const STATUSES: { id: Status; title: string; hint: string }[] = [
-  { id: 'inbox', title: 'Inbox', hint: 'Ещё не разобрано' },
-  { id: 'next', title: 'Next', hint: 'Следующая к реализации' },
-  { id: 'in_progress', title: 'In Progress', hint: 'Сейчас в работе' },
-  { id: 'done', title: 'Done', hint: 'Готово' },
+export const STATUSES: { id: Status; title: string }[] = [
+  { id: 'inbox', title: 'Входящие' },
+  { id: 'next', title: 'Далее' },
+  { id: 'in_progress', title: 'В работе' },
+  { id: 'done', title: 'Готово' },
 ]
 
 export const PRIORITIES: { id: Priority; title: string }[] = [
-  { id: 'low', title: 'Low' },
-  { id: 'medium', title: 'Medium' },
-  { id: 'high', title: 'High' },
+  { id: 'low', title: 'Низкий' },
+  { id: 'medium', title: 'Средний' },
+  { id: 'high', title: 'Высокий' },
 ]
+
+export function priorityTitle(priority: Priority): string {
+  return PRIORITIES.find((item) => item.id === priority)?.title ?? priority
+}
