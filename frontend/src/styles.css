@@ -165,6 +165,24 @@ code, .mono {
 .btn.danger { background: var(--danger); color: #fff; }
 .btn.danger:hover { background: #991b1b; }
 
+.archive-button {
+  opacity: 0.72;
+}
+
+.archive-button:hover {
+  opacity: 1;
+}
+
+.archive-icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .board {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -491,6 +509,28 @@ textarea {
   border-radius: var(--radius);
 }
 
+.image-dropzone {
+  display: flex;
+  min-height: 68px;
+  margin-bottom: 12px;
+  padding: 12px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: #faf8f4;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.image-dropzone.is-hover {
+  border-color: var(--accent);
+  background: #fff7ed;
+  color: var(--ink);
+}
+
 .capture-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -623,6 +663,66 @@ textarea {
   flex-wrap: wrap;
   align-items: center;
   margin: 8px 0 12px;
+}
+
+.archive-count {
+  justify-self: end;
+  min-width: 28px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: right;
+}
+
+.archive-list {
+  display: grid;
+  gap: 8px;
+}
+
+.archive-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+
+.archive-item-copy {
+  min-width: 0;
+}
+
+.archive-item-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.archive-item-title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-task-action {
+  margin-top: 18px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.archive-task-button {
+  padding-left: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.archive-task-button:hover {
+  color: var(--ink);
 }
 
 .empty-slot {
@@ -781,6 +881,28 @@ textarea {
 .layout-mobile .top-actions {
   flex: 1;
   justify-content: flex-end;
+}
+
+.layout-mobile .archive-label {
+  display: none;
+}
+
+.layout-mobile .archive-button {
+  flex: 0 0 44px;
+  padding: 8px;
+}
+
+.layout-mobile .archive-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.layout-mobile .archive-item {
+  grid-template-columns: 1fr;
+}
+
+.layout-mobile .archive-item .btn {
+  width: 100%;
 }
 
 .layout-mobile .banner {

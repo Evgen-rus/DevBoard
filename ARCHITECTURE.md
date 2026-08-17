@@ -36,6 +36,7 @@ DevBoard — внутренний task board для агентной разра�
 - GitHub Issue — source of truth самой задачи: title, description, transcript, project, status, priority, comments и история. Локальный `storage/` хранит байты файлов, а не заменяет Issue.
 - `DEV-{n}` всегда равен номеру GitHub Issue `n`. Не вводи отдельный генератор ID.
 - Статусы только четыре: `inbox`, `next`, `in_progress`, `done`. В GitHub это labels `status:inbox`, `status:next`, `status:in-progress`, `status:done`. `done` закрывает Issue, любой другой статус открывает его.
+- Архив не является пятым статусом: label `devboard:archived` скрывает задачу с обычной доски, не удаляя GitHub Issue, комментарии или локальные файлы. Восстановление снимает label и возвращает прежние статус и проект.
 - Проект — label `project:{Name}`. Новый проект создаётся label, без изменения кода.
 - Приоритет — label `priority:low`, `priority:medium`, `priority:high`.
 - Метаданные вложений и транскрипта сериализуются в HTML-комментарий `<!--devboard-meta ... -->` в теле Issue. Человеческий markdown выше комментария можно пересобирать, но JSON метаданных нельзя потерять.

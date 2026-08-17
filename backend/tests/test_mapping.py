@@ -84,6 +84,24 @@ def test_labels_for_update_replaces_status_and_keeps_others() -> None:
     assert "project:NeuroROP" in updated
 
 
+def test_archive_label_preserves_status_project_and_priority() -> None:
+    existing = ["project:NeuroROP", "status:in_progress", "priority:high", "custom"]
+    archived = mapping.labels_for_archive(existing, True)
+    assert mapping.ARCHIVED_LABEL in archived
+    assert "status:in_progress" in archived
+    assert "project:NeuroROP" in archived
+    assert "priority:high" in archived
+    assert mapping.labels_for_archive(archived, False) == existing
+
+
+def test_issue_to_task_marks_archived_issue() -> None:
+    issue = {
+        **ISSUE,
+        "labels": [*ISSUE["labels"], {"name": mapping.ARCHIVED_LABEL}],
+    }
+    assert mapping.issue_to_task(issue)["archived"] is True
+
+
 def test_detect_kind() -> None:
     assert mapping.detect_kind("note.webm", "video/webm") == "audio"
     assert mapping.detect_kind("ui.png", "image/png") == "image"

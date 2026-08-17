@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type ClipboardEvent, type FormEvent } from 'react'
 import {
   addAttachments,
   addComment,
+  archiveTask,
   attachmentUrl,
   createProject,
   createTask,
@@ -9,6 +10,7 @@ import {
   listProjects,
   listTasks,
   patchTask,
+  restoreTask,
   transcribe,
 } from './api'
 import type { Comment, Priority, Status, Task } from './types'
@@ -76,13 +78,18 @@ export default function Board({ onLogout }: Props) {
   const [doneOpen, setDoneOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [creatingProject, setCreatingProject] = useState(false)
+  const [archiveOpen, setArchiveOpen] = useState(false)
   const [openedId, setOpenedId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<Status | null>(null)
 
-  async function reload(selected = project) {
+  async function reload(selected = project, ensuredTask?: Task) {
     const [projectData, taskData] = await Promise.all([listProjects(), listTasks(selected)])
     setProjects(projectData.projects)
-    setTasks(taskData.tasks)
+    const visibleEnsuredTask = ensuredTask && (selected === 'all' || ensuredTask.project === selected)
+    const tasks = visibleEnsuredTask && !taskData.tasks.some((task) => task.id === ensuredTask.id)
+      ? [ensuredTask, ...taskData.tasks]
+      : taskData.tasks
+    setTasks(tasks)
   }
 
   useEffect(() => {
@@ -99,12 +106,13 @@ export default function Board({ onLogout }: Props) {
   }, [notice])
 
   useEffect(() => {
-    const overlayOpen = creating || creatingProject || Boolean(openedId)
+    const overlayOpen = creating || creatingProject || archiveOpen || Boolean(openedId)
     document.body.style.overflow = overlayOpen ? 'hidden' : ''
     function onKey(event: KeyboardEvent) {
       if (event.key !== 'Escape') return
       if (creatingProject) setCreatingProject(false)
       else if (creating) setCreating(false)
+      else if (archiveOpen) setArchiveOpen(false)
       else if (openedId) setOpenedId(null)
     }
     window.addEventListener('keydown', onKey)
@@ -112,7 +120,7 @@ export default function Board({ onLogout }: Props) {
       document.body.style.overflow = ''
       window.removeEventListener('keydown', onKey)
     }
-  }, [creating, creatingProject, openedId])
+  }, [creating, creatingProject, archiveOpen, openedId])
 
   const opened = tasks.find((task) => task.id === openedId) || null
   const grouped = useMemo(() => {
@@ -137,7 +145,15 @@ export default function Board({ onLogout }: Props) {
     setNotice(`Создана ${task.id}`)
     setNoticeId(task.id)
     writeLastProject(task.project)
-    reload(project).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка'))
+    if (narrow) setStatusFilter('inbox')
+
+    const selectedProject = project === 'all' || project === task.project ? project : task.project
+    if (selectedProject !== project) setProject(selectedProject)
+    setTasks((current) => [
+      task,
+      ...(selectedProject === project ? current.filter((item) => item.id !== task.id) : []),
+    ])
+    reload(selectedProject, task).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка'))
   }
 
   const listItems = grouped[statusFilter]
@@ -173,6 +189,16 @@ export default function Board({ onLogout }: Props) {
               Новая задача
             </button>
           )}
+          <button
+            className="btn ghost archive-button"
+            type="button"
+            onClick={() => setArchiveOpen(true)}
+            aria-label="Открыть архив"
+            title="Архив"
+          >
+            <ArchiveIcon />
+            <span className="archive-label">Архив</span>
+          </button>
           <button className="btn ghost" type="button" onClick={onLogout}>
             Выйти
           </button>
@@ -303,6 +329,24 @@ export default function Board({ onLogout }: Props) {
           onCreated={onCreatedTask}
         />
       ) : null}
+      {archiveOpen ? (
+        <ArchivedTasks
+          narrow={narrow}
+          onClose={() => setArchiveOpen(false)}
+          onRestored={(task) => {
+            if (narrow) setStatusFilter(task.status)
+            const selectedProject = project === 'all' || project === task.project ? project : task.project
+            if (selectedProject !== project) setProject(selectedProject)
+            setTasks((current) => [
+              task,
+              ...(selectedProject === project ? current.filter((item) => item.id !== task.id) : []),
+            ])
+            setNotice(`${task.id} восстановлена`)
+            setNoticeId(task.id)
+            reload(selectedProject, task).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка'))
+          }}
+        />
+      ) : null}
       {opened ? (
         <TaskDetail
           task={opened}
@@ -310,8 +354,98 @@ export default function Board({ onLogout }: Props) {
           narrow={narrow}
           onClose={() => setOpenedId(null)}
           onChange={(task) => setTasks((current) => current.map((item) => (item.id === task.id ? task : item)))}
+          onArchived={(task) => {
+            setTasks((current) => current.filter((item) => item.id !== task.id))
+            setOpenedId(null)
+            setNotice(`${task.id} перемещена в архив`)
+            setNoticeId(null)
+          }}
         />
       ) : null}
+    </div>
+  )
+}
+
+function ArchiveIcon() {
+  return (
+    <svg className="archive-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7h16v13H4zM3 4h18v4H3zm6 7h6" />
+    </svg>
+  )
+}
+
+function ArchivedTasks({
+  narrow,
+  onClose,
+  onRestored,
+}: {
+  narrow: boolean
+  onClose: () => void
+  onRestored: (task: Task) => void
+}) {
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [loading, setLoading] = useState(true)
+  const [restoringId, setRestoringId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    listTasks('all', true)
+      .then((result) => setTasks(result.tasks))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Не удалось открыть архив'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function restore(task: Task) {
+    setRestoringId(task.id)
+    setError('')
+    try {
+      const result = await restoreTask(task.id)
+      setTasks((current) => current.filter((item) => item.id !== task.id))
+      onRestored(result.task)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось восстановить задачу')
+    } finally {
+      setRestoringId(null)
+    }
+  }
+
+  return (
+    <div className={`overlay ${narrow ? 'sheet' : ''}`} onClick={onClose}>
+      <div className={`panel ${narrow ? 'sheet' : 'drawer'} archive-panel`} onClick={(event) => event.stopPropagation()}>
+        <div className="sheet-head">
+          <button className="btn ghost" type="button" onClick={onClose}>
+            Закрыть
+          </button>
+          <h2>Архив</h2>
+          <span className="archive-count">{tasks.length}</span>
+        </div>
+
+        {loading ? <div className="muted">Загружаю…</div> : null}
+        {!loading && tasks.length === 0 ? <div className="empty-slot">В архиве пусто</div> : null}
+        <div className="archive-list">
+          {tasks.map((task) => (
+            <div className="archive-item" key={task.id}>
+              <div className="archive-item-copy">
+                <div className="archive-item-meta">
+                  <span className="mono">{task.id}</span>
+                  <span>{task.project}</span>
+                  <span>{STATUSES.find((item) => item.id === task.status)?.title}</span>
+                </div>
+                <div className="archive-item-title">{task.title}</div>
+              </div>
+              <button
+                className="btn secondary"
+                type="button"
+                disabled={restoringId === task.id}
+                onClick={() => restore(task).catch(() => undefined)}
+              >
+                {restoringId === task.id ? '…' : 'Восстановить'}
+              </button>
+            </div>
+          ))}
+        </div>
+        {error ? <div className="status-error">{error}</div> : null}
+      </div>
     </div>
   )
 }
@@ -488,6 +622,13 @@ function NewTask({
     setFiles((current) => [...current, ...Array.from(list)])
   }
 
+  function pasteImages(event: ClipboardEvent<HTMLFormElement>) {
+    const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'))
+    if (!images.length) return
+    event.preventDefault()
+    addFiles(images)
+  }
+
   async function transcribeFile(file: File) {
     setTranscribing(true)
     setError('')
@@ -553,6 +694,7 @@ function NewTask({
         className={`panel ${narrow ? 'sheet' : 'drawer'} composer`}
         onClick={(event) => event.stopPropagation()}
         onSubmit={onSubmit}
+        onPaste={pasteImages}
         onDragOver={(event) => {
           event.preventDefault()
           setFileHover(true)
@@ -593,6 +735,24 @@ function NewTask({
             />
           </div>
 
+          <div
+            className={`image-dropzone ${fileHover ? 'is-hover' : ''}`}
+            onDragOver={(event) => {
+              event.preventDefault()
+              setFileHover(true)
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              setFileHover(false)
+              const images = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith('image/'))
+              if (images.length) addFiles(images)
+              else setError('Перетащите файл изображения')
+            }}
+          >
+            Перетащите картинку сюда или вставьте через Ctrl+V
+          </div>
+
           <div className="capture-actions">
             {recording ? (
               <button className="btn danger" type="button" onClick={stopRecording}>
@@ -610,7 +770,7 @@ function NewTask({
             )}
             <FilePicker
               id="new-task-images"
-              label="Скриншот"
+              label="Скриншот / Ctrl+V"
               accept="image/*"
               multiple
               onFiles={addFiles}
@@ -704,12 +864,14 @@ function TaskDetail({
   narrow,
   onClose,
   onChange,
+  onArchived,
 }: {
   task: Task
   projects: string[]
   narrow: boolean
   onClose: () => void
   onChange: (task: Task) => void
+  onArchived: (task: Task) => void
 }) {
   const [title, setTitle] = useState(task.title)
   const [description, setDescription] = useState(task.description)
@@ -722,6 +884,7 @@ function TaskDetail({
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [archiving, setArchiving] = useState(false)
 
   useEffect(() => {
     setTitle(task.title)
@@ -761,6 +924,20 @@ function TaskDetail({
     await navigator.clipboard.writeText(AGENT_PROMPT(task))
     setCopied(true)
     window.setTimeout(() => setCopied(false), 2000)
+  }
+
+  async function archive() {
+    if (!window.confirm(`Архивировать ${task.id}? Задачу и файлы можно будет восстановить.`)) return
+    setArchiving(true)
+    setError('')
+    try {
+      const result = await archiveTask(task.id)
+      onArchived(result.task)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось архивировать задачу')
+    } finally {
+      setArchiving(false)
+    }
   }
 
   return (
@@ -904,6 +1081,16 @@ function TaskDetail({
             }}
           >
             Добавить
+          </button>
+        </div>
+        <div className="archive-task-action">
+          <button
+            className="btn ghost archive-task-button"
+            type="button"
+            disabled={archiving}
+            onClick={() => archive().catch(() => undefined)}
+          >
+            {archiving ? 'Архивирую…' : 'Архивировать задачу'}
           </button>
         </div>
       </div>

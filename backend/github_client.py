@@ -18,6 +18,7 @@ LABEL_COLORS = {
     "priority:low": "94A3B8",
     "priority:medium": "2563EB",
     "priority:high": "DC2626",
+    "devboard:archived": "6B7280",
     "project": "6E40C9",
 }
 

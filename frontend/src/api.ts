@@ -54,9 +54,12 @@ export function createProject(name: string) {
   })
 }
 
-export function listTasks(project?: string) {
-  const query = project && project !== 'all' ? `?project=${encodeURIComponent(project)}` : ''
-  return request<{ tasks: Task[] }>(`/api/tasks${query}`)
+export function listTasks(project?: string, archived = false) {
+  const query = new URLSearchParams()
+  if (project && project !== 'all') query.set('project', project)
+  if (archived) query.set('archived', 'true')
+  const suffix = query.size ? `?${query.toString()}` : ''
+  return request<{ tasks: Task[] }>(`/api/tasks${suffix}`)
 }
 
 export function getTask(id: string) {
@@ -107,6 +110,18 @@ export function addAttachments(id: string, files: File[]) {
   return request<{ task: Task }>(`/api/tasks/${encodeURIComponent(id)}/attachments`, {
     method: 'POST',
     body,
+  })
+}
+
+export function archiveTask(id: string) {
+  return request<{ task: Task }>(`/api/tasks/${encodeURIComponent(id)}/archive`, {
+    method: 'POST',
+  })
+}
+
+export function restoreTask(id: string) {
+  return request<{ task: Task }>(`/api/tasks/${encodeURIComponent(id)}/restore`, {
+    method: 'POST',
   })
 }
 

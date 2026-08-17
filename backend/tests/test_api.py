@@ -15,7 +15,7 @@ os.environ["STORAGE_DIR"] = str(Path(__file__).resolve().parent / "_tmp_storage"
 
 from fastapi.testclient import TestClient
 
-from mapping import render_issue_body
+from mapping import ARCHIVED_LABEL, render_issue_body
 import main as main_mod
 
 
@@ -174,6 +174,44 @@ def test_create_task_and_status_change(client) -> None:
     assert patched.status_code == 200
     assert patched.json()["task"]["status"] == "in_progress"
     assert fake.issues[53]["state"] == "open"
+
+
+def test_archive_hides_task_preserves_files_and_restore_returns_it(client) -> None:
+    test_client, fake = client
+    test_client.post("/api/login", json={"password": "test-password"})
+    created = test_client.post(
+        "/api/tasks",
+        data={
+            "project": "LeadRecord",
+            "title": "Задача с архивом",
+            "description": "Файлы должны сохраниться",
+            "priority": "medium",
+        },
+        files=[("files", ("shot.png", b"png-data", "image/png"))],
+    )
+    task = created.json()["task"]
+    settings = main_mod.app.dependency_overrides[main_mod.get_settings]()
+    stored_file = settings.storage_dir / task["id"] / task["attachments"][0]["filename"]
+    assert stored_file.is_file()
+
+    archived = test_client.post(f"/api/tasks/{task['id']}/archive")
+    assert archived.status_code == 200
+    assert archived.json()["task"]["archived"] is True
+    assert stored_file.is_file()
+    assert all(item["id"] != task["id"] for item in test_client.get("/api/tasks").json()["tasks"])
+    archived_tasks = test_client.get("/api/tasks?archived=true").json()["tasks"]
+    assert [item["id"] for item in archived_tasks] == [task["id"]]
+
+    restored = test_client.post(f"/api/tasks/{task['id']}/restore")
+    assert restored.status_code == 200
+    restored_task = restored.json()["task"]
+    assert restored_task["archived"] is False
+    assert restored_task["status"] == "inbox"
+    assert restored_task["project"] == "LeadRecord"
+    assert stored_file.is_file()
+    assert ARCHIVED_LABEL not in {
+        label["name"] for label in fake.issues[task["number"]]["labels"]
+    }
 
 
 def test_health_does_not_require_auth(client) -> None:
