@@ -6,6 +6,7 @@ import {
   attachmentUrl,
   createProject,
   createTask,
+  getAgentContext,
   listComments,
   listProjects,
   listTasks,
@@ -21,9 +22,6 @@ type Props = { onLogout: () => void }
 const LAST_PROJECT_KEY = 'devboard.lastProject'
 // Узкий экран — отдельная композиция (список + вкладки), а не сжатый канбан.
 const NARROW_QUERY = '(max-width: 900px)'
-const AGENT_PROMPT = (task: Task) =>
-  `Возьми ${task.id}, изучи задачу и текущий проект, составь план и реализуй.`
-
 function readLastProject(): string {
   try {
     return localStorage.getItem(LAST_PROJECT_KEY) || ''
@@ -921,9 +919,15 @@ function TaskDetail({
   }
 
   async function copyPrompt() {
-    await navigator.clipboard.writeText(AGENT_PROMPT(task))
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 2000)
+    setError('')
+    try {
+      const context = await getAgentContext(task.id)
+      await navigator.clipboard.writeText(context.agent_prompt)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось скопировать промпт')
+    }
   }
 
   async function archive() {

@@ -26,8 +26,21 @@ class MaterializeError(ValueError):
     """Нельзя сохранить локальную копию задачи."""
 
 
-def load_env(path: str) -> None:
-    env_path = os.path.abspath(path)
+def default_client_config() -> Path:
+    return Path.home() / ".devboard" / "client.env"
+
+
+def default_cache_root() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "DevBoard" / "tasks"
+    return Path.home() / ".cache" / "devboard" / "tasks"
+
+
+def load_env(path: str | Path | None) -> None:
+    if path is None:
+        return
+    env_path = os.path.abspath(os.path.expanduser(str(path)))
     if not os.path.isfile(env_path):
         return
     with open(env_path, encoding="utf-8") as handle:
@@ -125,8 +138,8 @@ def resolve_attachment_url(base_url: str, task_id: str, item: dict[str, Any]) ->
     )
 
 
-def local_attachment_path(task_id: str, filename: str) -> str:
-    return f".devboard/{task_id}/{filename}"
+def local_attachment_path(task_dir: Path, filename: str) -> str:
+    return str((task_dir / filename).resolve())
 
 
 def materialize_context(
@@ -135,6 +148,7 @@ def materialize_context(
     dest_root: Path,
     download: Callable[[str], bytes],
     base_url: str,
+    include_audio: bool = True,
 ) -> dict[str, Any]:
     """Сохраняет agent-context и вложения в dest_root/<task_id>/."""
     task_id = parse_task_id(str(payload.get("id") or ""))
@@ -148,20 +162,28 @@ def materialize_context(
     used_names = {"task.json"}
     attachments: list[dict[str, Any]] = []
     downloaded: list[str] = []
+    skipped: list[str] = []
     for item in payload.get("attachments") or []:
         if not isinstance(item, dict):
             continue
         original_name = str(item.get("filename") or "file")
         stored_name = unique_filename(original_name, used_names)
         used_names.add(stored_name)
+        entry = dict(item)
+        entry["filename"] = stored_name
+        if str(item.get("kind") or "") == "audio" and not include_audio:
+            entry["local_path"] = None
+            entry["downloaded"] = False
+            attachments.append(entry)
+            skipped.append(stored_name)
+            continue
         target = destination_file(staging, stored_name)
         data = download(resolve_attachment_url(base_url, task_id, item))
         if not data:
             raise MaterializeError(f"Пустое вложение: {original_name}")
         target.write_bytes(data)
-        entry = dict(item)
-        entry["filename"] = stored_name
-        entry["local_path"] = local_attachment_path(task_id, stored_name)
+        entry["local_path"] = local_attachment_path(final_dir, stored_name)
+        entry["downloaded"] = True
         attachments.append(entry)
         downloaded.append(stored_name)
 
@@ -180,22 +202,26 @@ def materialize_context(
         "task_dir": final_dir,
         "task_json": final_dir / "task.json",
         "files": downloaded,
+        "skipped": skipped,
         "context": context,
     }
 
 
 def print_materialize_summary(result: dict[str, Any]) -> None:
-    task_id = result["task_id"]
     lines = [
-        f"Контекст сохранён: .devboard/{task_id}/task.json",
+        f"Контекст сохранён: {result['task_json'].resolve()}",
     ]
     files = result["files"]
     if files:
         lines.append("Файлы:")
         for name in files:
-            lines.append(f"  .devboard/{task_id}/{name}")
+            lines.append(f"  {(result['task_dir'] / name).resolve()}")
     else:
-        lines.append("Вложений нет.")
+        lines.append("Скачанных вложений нет.")
+    if result["skipped"]:
+        lines.append("Не скачаны по выбранной политике:")
+        for name in result["skipped"]:
+            lines.append(f"  {name}")
     sys.stdout.write("\n".join(lines) + "\n")
 
 
@@ -203,19 +229,32 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Получить контекст задачи DevBoard")
     parser.add_argument("command", choices=["get"], help="get — полный контекст задачи")
     parser.add_argument("task_id", help="ID задачи, например DEV-52")
+    parser.add_argument("--url", default=None, help="Базовый URL DevBoard")
     parser.add_argument(
-        "--url",
-        default=os.environ.get("DEVBOARD_URL", "http://127.0.0.1:8080"),
-        help="Базовый URL DevBoard",
+        "--config",
+        default=str(default_client_config()),
+        help="Клиентский env-файл (по умолчанию ~/.devboard/client.env)",
     )
-    parser.add_argument("--env-file", default=".env", help="Путь к .env")
+    parser.add_argument("--env-file", default=None, help="Дополнительный env-файл")
     parser.add_argument(
         "--materialize",
         action="store_true",
-        help="Скачать JSON и вложения в .devboard/<id>/",
+        help="Скачать JSON и вложения в локальный кэш",
+    )
+    parser.add_argument("--dest-root", default=None, help="Корень локального кэша")
+    parser.add_argument(
+        "--skip-audio",
+        action="store_true",
+        help="Не скачивать аудио, если для работы достаточно транскрипта",
     )
     args = parser.parse_args()
+    load_env(args.config)
     load_env(args.env_file)
+    base_url = (
+        args.url
+        or os.environ.get("DEVBOARD_URL")
+        or "http://127.0.0.1:8080"
+    ).rstrip("/")
     token = os.environ.get("DEVBOARD_API_TOKEN") or os.environ.get("DEVBOARD_PASSWORD")
     if not token:
         raise SystemExit("Задайте DEVBOARD_API_TOKEN или DEVBOARD_PASSWORD")
@@ -224,7 +263,7 @@ def main() -> None:
     except MaterializeError as exc:
         raise SystemExit(str(exc)) from exc
     payload = request_json(
-        f"{args.url.rstrip('/')}/api/tasks/{quote(task_id)}/agent-context",
+        f"{base_url}/api/tasks/{quote(task_id)}/agent-context",
         token,
     )
     if not isinstance(payload, dict):
@@ -237,9 +276,10 @@ def main() -> None:
         try:
             result = materialize_context(
                 payload,
-                dest_root=Path(".devboard"),
+                dest_root=Path(args.dest_root).expanduser() if args.dest_root else default_cache_root(),
                 download=download,
-                base_url=args.url.rstrip("/"),
+                base_url=base_url,
+                include_audio=not args.skip_audio,
             )
         except MaterializeError as exc:
             raise SystemExit(str(exc)) from exc

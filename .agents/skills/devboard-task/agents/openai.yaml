@@ -1,0 +1,4 @@
+interface:
+  display_name: "DevBoard Task"
+  short_description: "Fetch and discuss DevBoard tasks safely"
+  default_prompt: "Use $devboard-task to fetch a DEV-ID, inspect its attachments, and discuss a plan before editing."
