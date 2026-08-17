@@ -59,6 +59,7 @@ export default function App() {
             <input
               id="password"
               type="password"
+              autoComplete="current-password"
               autoFocus
               value={password}
               onChange={(event) => setPassword(event.target.value)}

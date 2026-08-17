@@ -16,8 +16,47 @@ import { PRIORITIES, STATUSES, priorityTitle } from './types'
 
 type Props = { onLogout: () => void }
 
+const LAST_PROJECT_KEY = 'devboard.lastProject'
+// Узкий экран — отдельная композиция (список + вкладки), а не сжатый канбан.
+const NARROW_QUERY = '(max-width: 900px)'
 const AGENT_PROMPT = (task: Task) =>
   `Возьми ${task.id}, изучи задачу и текущий проект, составь план и реализуй.`
+
+function readLastProject(): string {
+  try {
+    return localStorage.getItem(LAST_PROJECT_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+function writeLastProject(name: string) {
+  try {
+    localStorage.setItem(LAST_PROJECT_KEY, name)
+  } catch {
+    // private mode / blocked storage
+  }
+}
+
+function useNarrow() {
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
+  useEffect(() => {
+    const media = window.matchMedia(NARROW_QUERY)
+    const onChange = () => setNarrow(media.matches)
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+  return narrow
+}
+
+function composerProject(filter: string, projects: string[], tasks: Task[]): string {
+  // Сначала текущий фильтр, затем последний использованный проект, иначе проект ближайшей задачи.
+  if (filter !== 'all' && filter) return filter
+  const last = readLastProject()
+  if (last && (projects.length === 0 || projects.includes(last))) return last
+  if (tasks[0]?.project) return tasks[0].project
+  return projects[0] || 'NeuroROP'
+}
 
 function cardExcerpt(task: Task): string {
   const text = (task.description || '').replace(/\s+/g, ' ').trim()
@@ -26,11 +65,14 @@ function cardExcerpt(task: Task): string {
 }
 
 export default function Board({ onLogout }: Props) {
+  const narrow = useNarrow()
   const [projects, setProjects] = useState<string[]>([])
   const [project, setProject] = useState('all')
+  const [statusFilter, setStatusFilter] = useState<Status>('inbox')
   const [tasks, setTasks] = useState<Task[]>([])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [noticeId, setNoticeId] = useState<string | null>(null)
   const [doneOpen, setDoneOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [creatingProject, setCreatingProject] = useState(false)
@@ -47,6 +89,31 @@ export default function Board({ onLogout }: Props) {
     reload().catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
   }, [])
 
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => {
+      setNotice('')
+      setNoticeId(null)
+    }, 6000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
+  useEffect(() => {
+    const overlayOpen = creating || creatingProject || Boolean(openedId)
+    document.body.style.overflow = overlayOpen ? 'hidden' : ''
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      if (creatingProject) setCreatingProject(false)
+      else if (creating) setCreating(false)
+      else if (openedId) setOpenedId(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = ''
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [creating, creatingProject, openedId])
+
   const opened = tasks.find((task) => task.id === openedId) || null
   const grouped = useMemo(() => {
     const map: Record<Status, Task[]> = { inbox: [], next: [], in_progress: [], done: [] }
@@ -59,23 +126,32 @@ export default function Board({ onLogout }: Props) {
     setTasks((current) => current.map((task) => (task.id === id ? result.task : task)))
   }
 
+  function selectProject(value: string) {
+    setProject(value)
+    if (value !== 'all') writeLastProject(value)
+    reload(value).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка'))
+  }
+
+  function onCreatedTask(task: Task) {
+    setCreating(false)
+    setNotice(`Создана ${task.id}`)
+    setNoticeId(task.id)
+    writeLastProject(task.project)
+    reload(project).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка'))
+  }
+
+  const listItems = grouped[statusFilter]
+  const showProject = project === 'all'
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${narrow ? 'layout-mobile' : 'layout-desktop'}`}>
       <header className="topbar">
         <div className="brand">
           <h1>DevBoard</h1>
-          <span>MadBoss</span>
+          {narrow ? null : <span>MadBoss</span>}
         </div>
         <div className="top-actions">
-          <select
-            value={project}
-            onChange={(event) => {
-              const value = event.target.value
-              setProject(value)
-              reload(value).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка'))
-            }}
-            aria-label="Проект"
-          >
+          <select value={project} onChange={(event) => selectProject(event.target.value)} aria-label="Проект">
             <option value="all">Все проекты</option>
             {projects.map((name) => (
               <option key={name} value={name}>
@@ -83,63 +159,126 @@ export default function Board({ onLogout }: Props) {
               </option>
             ))}
           </select>
-          <button className="btn secondary" type="button" onClick={() => setCreatingProject(true)}>
-            + Проект
+          <button
+            className="btn ghost"
+            type="button"
+            onClick={() => setCreatingProject(true)}
+            aria-label="Новый проект"
+            title="Новый проект"
+          >
+            {narrow ? '+' : '+ Проект'}
           </button>
-          <button className="btn" type="button" onClick={() => setCreating(true)}>
-            + Новая задача
-          </button>
+          {narrow ? null : (
+            <button className="btn" type="button" onClick={() => setCreating(true)}>
+              Новая задача
+            </button>
+          )}
           <button className="btn ghost" type="button" onClick={onLogout}>
             Выйти
           </button>
         </div>
       </header>
       {error ? <div className="banner error">{error}</div> : null}
-      {notice ? <div className="banner ok">{notice}</div> : null}
-      <main className="board">
-        {STATUSES.map((column) => {
-          const items = grouped[column.id]
-          const collapsed = column.id === 'done' && !doneOpen
-          return (
-            <section
-              key={column.id}
-              className={`column ${column.id} ${items.length === 0 ? 'is-empty' : ''} ${collapsed ? 'collapsed' : ''} ${dropTarget === column.id ? 'drag-over' : ''}`}
-              onDragOver={(event) => {
-                event.preventDefault()
-                setDropTarget(column.id)
-              }}
-              onDrop={(event) => {
-                event.preventDefault()
-                setDropTarget(null)
-                const id = event.dataTransfer.getData('text/plain')
-                if (id) changeStatus(id, column.id).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка'))
+      {notice ? (
+        <div className="banner ok">
+          <span>{notice}</span>
+          {noticeId ? (
+            <button
+              className="banner-link"
+              type="button"
+              onClick={() => {
+                setOpenedId(noticeId)
+                setNotice('')
+                setNoticeId(null)
               }}
             >
-              <div className="column-head">
-                <h2>{column.title}</h2>
-                <span className={`count ${column.id}`}>{items.length}</span>
-              </div>
-              {column.id === 'done' ? (
-                <button className="btn secondary done-toggle" type="button" onClick={() => setDoneOpen((value) => !value)}>
-                  {doneOpen ? 'Свернуть' : 'Показать'}
-                </button>
-              ) : null}
-              {collapsed ? null : items.length === 0 ? (
-                <div className="empty-slot">Нет задач</div>
-              ) : (
-                items.map((task) => (
-                  <TaskCard
-                    key={task.id}
-                    task={task}
-                    onOpen={() => setOpenedId(task.id)}
-                    onDragEnd={() => setDropTarget(null)}
-                  />
-                ))
-              )}
-            </section>
-          )
-        })}
-      </main>
+              Открыть
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {narrow ? (
+        <>
+          <StatusTabs
+            grouped={grouped}
+            current={statusFilter}
+            onChange={setStatusFilter}
+          />
+          <main className="task-list">
+            {listItems.length === 0 ? (
+              <div className="empty-slot">Пока пусто</div>
+            ) : (
+              listItems.map((task) => (
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  draggable={false}
+                  showProject={showProject}
+                  onOpen={() => setOpenedId(task.id)}
+                />
+              ))
+            )}
+          </main>
+          <div className="capture-bar">
+            <button className="btn" type="button" onClick={() => setCreating(true)}>
+              Новая задача
+            </button>
+          </div>
+        </>
+      ) : (
+        <main className="board">
+          {STATUSES.map((column) => {
+            const items = grouped[column.id]
+            const collapsed = column.id === 'done' && !doneOpen
+            return (
+              <section
+                key={column.id}
+                className={`column ${column.id} ${items.length === 0 ? 'is-empty' : ''} ${collapsed ? 'collapsed' : ''} ${dropTarget === column.id ? 'drag-over' : ''}`}
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  setDropTarget(column.id)
+                }}
+                onDragLeave={(event) => {
+                  if (event.currentTarget.contains(event.relatedTarget as Node)) return
+                  setDropTarget((current) => (current === column.id ? null : current))
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  setDropTarget(null)
+                  const id = event.dataTransfer.getData('text/plain')
+                  if (id) changeStatus(id, column.id).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка'))
+                }}
+              >
+                <div className="column-head">
+                  <h2>{column.title}</h2>
+                  <span className={`count ${column.id}`}>{items.length}</span>
+                </div>
+                {column.id === 'done' ? (
+                  <button className="btn ghost done-toggle" type="button" onClick={() => setDoneOpen((value) => !value)}>
+                    {doneOpen ? 'Свернуть' : 'Показать'}
+                  </button>
+                ) : null}
+                {collapsed ? null : items.length === 0 ? (
+                  <div className="empty-slot" />
+                ) : (
+                  items.map((task) => (
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      draggable
+                      showProject={showProject}
+                      onOpen={() => setOpenedId(task.id)}
+                      onDragEnd={() => setDropTarget(null)}
+                    />
+                  ))
+                )}
+              </section>
+            )
+          })}
+        </main>
+      )}
+
       {creatingProject ? (
         <NewProject
           onClose={() => setCreatingProject(false)}
@@ -147,8 +286,10 @@ export default function Board({ onLogout }: Props) {
             const created = await createProject(name)
             setProjects((current) => (current.includes(created.project) ? current : [...current, created.project]))
             setProject(created.project)
+            writeLastProject(created.project)
             setCreatingProject(false)
             setNotice(`Проект ${created.project} создан`)
+            setNoticeId(null)
             await reload(created.project)
           }}
         />
@@ -156,20 +297,17 @@ export default function Board({ onLogout }: Props) {
       {creating ? (
         <NewTask
           projects={projects}
-          defaultProject={project === 'all' ? projects[0] || 'NeuroROP' : project}
+          defaultProject={composerProject(project, projects, tasks)}
+          narrow={narrow}
           onClose={() => setCreating(false)}
-          onCreated={async (task) => {
-            setCreating(false)
-            setNotice(`Создана ${task.id}`)
-            setOpenedId(task.id)
-            await reload(project)
-          }}
+          onCreated={onCreatedTask}
         />
       ) : null}
       {opened ? (
         <TaskDetail
           task={opened}
           projects={projects}
+          narrow={narrow}
           onClose={() => setOpenedId(null)}
           onChange={(task) => setTasks((current) => current.map((item) => (item.id === task.id ? task : item)))}
         />
@@ -178,14 +316,46 @@ export default function Board({ onLogout }: Props) {
   )
 }
 
+function StatusTabs({
+  grouped,
+  current,
+  onChange,
+}: {
+  grouped: Record<Status, Task[]>
+  current: Status
+  onChange: (status: Status) => void
+}) {
+  return (
+    <div className="status-tabs" role="tablist" aria-label="Статус">
+      {STATUSES.map((column) => (
+        <button
+          key={column.id}
+          className={`status-tab ${column.id} ${current === column.id ? 'is-on' : ''}`}
+          type="button"
+          role="tab"
+          aria-selected={current === column.id}
+          onClick={() => onChange(column.id)}
+        >
+          <span>{column.title}</span>
+          <span className="tab-count">{grouped[column.id].length}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function TaskCard({
   task,
+  draggable,
+  showProject,
   onOpen,
   onDragEnd,
 }: {
   task: Task
+  draggable: boolean
+  showProject: boolean
   onOpen: () => void
-  onDragEnd: () => void
+  onDragEnd?: () => void
 }) {
   const images = task.attachments.filter((item) => item.kind === 'image')
   const audioCount = task.attachments.filter((item) => item.kind === 'audio').length
@@ -193,45 +363,45 @@ function TaskCard({
   const preview = images[0]
   const excerpt = cardExcerpt(task)
   const marks = [
-    audioCount ? `голос ${audioCount}` : '',
-    images.length ? `фото ${images.length}` : '',
-    fileCount ? `файл ${fileCount}` : '',
-    task.transcript ? 'текст' : '',
-    task.comments_count ? `коммент ${task.comments_count}` : '',
+    audioCount ? (audioCount > 1 ? `голос ${audioCount}` : 'голос') : '',
+    images.length ? (images.length > 1 ? `${images.length} фото` : 'фото') : '',
+    fileCount ? (fileCount > 1 ? `${fileCount} файл` : 'файл') : '',
+    task.comments_count ? `${task.comments_count} комм.` : '',
   ].filter(Boolean)
+
   return (
     <button
       className="task-card"
       type="button"
-      draggable
-      onDragStart={(event) => event.dataTransfer.setData('text/plain', task.id)}
+      draggable={draggable}
+      onDragStart={draggable ? (event) => event.dataTransfer.setData('text/plain', task.id) : undefined}
       onDragEnd={onDragEnd}
       onClick={onOpen}
     >
-      <div className="task-head">
-        <div className="task-id mono">{task.id}</div>
-        <span className={`pill ${task.priority}`}>
-          <span className={`priority-dot ${task.priority}`} />
-          {priorityTitle(task.priority)}
-        </span>
-      </div>
-      <div className="task-title">{task.title}</div>
-      {excerpt ? <div className="task-excerpt">{excerpt}</div> : null}
-      {preview ? (
-        <img className="task-thumb" src={attachmentUrl(task.id, preview.filename)} alt="" />
-      ) : null}
-      <div className="meta-row">
-        <span className="pill project">{task.project}</span>
-      </div>
-      {marks.length ? (
-        <div className="icon-row">
+      <div className="task-main">
+        <div className="task-head">
+          <div className="task-id mono">{task.id}</div>
+          {task.priority === 'high' ? (
+            <span className="pill high">
+              <span className={`priority-dot ${task.priority}`} />
+              {priorityTitle(task.priority)}
+            </span>
+          ) : (
+            <span className={`priority-dot ${task.priority}`} title={priorityTitle(task.priority)} />
+          )}
+        </div>
+        <div className="task-title">{task.title}</div>
+        {excerpt ? <div className="task-excerpt">{excerpt}</div> : null}
+        <div className="meta-row">
+          {showProject ? <span className="pill project">{task.project}</span> : null}
           {marks.map((mark) => (
             <span className="meta-chip" key={mark}>
               {mark}
             </span>
           ))}
         </div>
-      ) : null}
+      </div>
+      {preview ? <img className="task-thumb" src={attachmentUrl(task.id, preview.filename)} alt="" /> : null}
     </button>
   )
 }
@@ -261,8 +431,8 @@ function NewProject({
   }
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <form className="panel" onClick={(event) => event.stopPropagation()} onSubmit={onSubmit}>
+    <div className="overlay center" onClick={onClose}>
+      <form className="panel modal" onClick={(event) => event.stopPropagation()} onSubmit={onSubmit}>
         <h2>Новый проект</h2>
         <div className="field">
           <label htmlFor="project-name">Название</label>
@@ -271,7 +441,7 @@ function NewProject({
             autoFocus
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="Например, NeuroROP"
+            placeholder="NeuroROP"
           />
         </div>
         {error ? <div className="status-error">{error}</div> : null}
@@ -279,7 +449,7 @@ function NewProject({
           <button className="btn" type="submit" disabled={busy || !name.trim()}>
             {busy ? 'Создаю…' : 'Создать'}
           </button>
-          <button className="btn secondary" type="button" onClick={onClose}>
+          <button className="btn ghost" type="button" onClick={onClose}>
             Отмена
           </button>
         </div>
@@ -291,13 +461,15 @@ function NewProject({
 function NewTask({
   projects,
   defaultProject,
+  narrow,
   onClose,
   onCreated,
 }: {
   projects: string[]
   defaultProject: string
+  narrow: boolean
   onClose: () => void
-  onCreated: (task: Task) => Promise<void>
+  onCreated: (task: Task) => void
 }) {
   const [project, setProject] = useState(defaultProject)
   const [title, setTitle] = useState('')
@@ -364,7 +536,7 @@ function NewTask({
     setError('')
     try {
       const result = await createTask({ project, title, description, priority, transcript, files })
-      await onCreated(result.task)
+      onCreated(result.task)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось создать задачу')
     } finally {
@@ -372,100 +544,156 @@ function NewTask({
     }
   }
 
+  const canSave = Boolean(title || description || files.length || transcript)
+  const projectOptions = projects.includes(project) ? projects : [project, ...projects]
+
   return (
-    <div className="overlay" onClick={onClose}>
-      <form className="panel" onClick={(event) => event.stopPropagation()} onSubmit={onSubmit}>
-        <h2>Новая задача</h2>
-        <p className="muted">Можно коротко текстом, скриншотами и голосом. Техническое ТЗ не обязательно.</p>
-        <div className="field">
-          <label>Проект</label>
-          <select value={project} onChange={(event) => setProject(event.target.value)}>
-            {(projects.includes(project) ? projects : [project, ...projects]).map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+    <div className={`overlay ${narrow ? 'sheet' : ''}`} onClick={onClose}>
+      <form
+        className={`panel ${narrow ? 'sheet' : 'drawer'} composer`}
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={onSubmit}
+        onDragOver={(event) => {
+          event.preventDefault()
+          setFileHover(true)
+        }}
+        onDragLeave={() => setFileHover(false)}
+        onDrop={(event) => {
+          event.preventDefault()
+          setFileHover(false)
+          if (event.dataTransfer.files.length) addFiles(event.dataTransfer.files)
+        }}
+      >
+        <div className="sheet-head">
+          <button className="btn ghost" type="button" onClick={onClose}>
+            Отмена
+          </button>
+          <h2>Новая задача</h2>
+          <button className="btn" type="submit" disabled={busy || recording || !canSave}>
+            {busy ? 'Сохраняю…' : 'Создать'}
+          </button>
         </div>
-        <div className="field">
-          <label>Название</label>
-          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Можно оставить пустым" />
-        </div>
-        <div className="field">
-          <label>Описание</label>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Пара фраз своими словами" />
-        </div>
-        <div className="field">
-          <label>Файлы и скриншоты</label>
-          <div
-            className={`dropzone ${fileHover ? 'is-hover' : ''}`}
-            onDragOver={(event) => {
-              event.preventDefault()
-              setFileHover(true)
-            }}
-            onDragLeave={() => setFileHover(false)}
-            onDrop={(event) => {
-              event.preventDefault()
-              setFileHover(false)
-              if (event.dataTransfer.files.length) addFiles(event.dataTransfer.files)
-            }}
-          >
-            <div>Перетащите файлы сюда</div>
-            <FilePicker id="new-task-files" label="Выбрать файлы" multiple onFiles={addFiles} />
+
+        <div className={`composer-body ${fileHover ? 'is-hover' : ''}`}>
+          <div className="field">
+            <select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Проект">
+              {projectOptions.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
           </div>
-          <FilePreview files={files} />
-        </div>
-        <div className="field">
-          <label>Голос</label>
-          <div className="record-box">
-            {recording ? <span className="rec-dot" /> : null}
+          <div className="field">
+            <input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Название"
+              autoFocus={!narrow}
+            />
+          </div>
+
+          <div className="capture-actions">
             {recording ? (
               <button className="btn danger" type="button" onClick={stopRecording}>
-                Остановить запись
+                <span className="rec-dot" />
+                Стоп
               </button>
             ) : (
-              <button className="btn secondary" type="button" onClick={() => startRecording().catch((err: unknown) => setError(err instanceof Error ? err.message : 'Нет доступа к микрофону'))}>
-                Записать голос
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={() => startRecording().catch((err: unknown) => setError(err instanceof Error ? err.message : 'Нет доступа к микрофону'))}
+              >
+                Записать
               </button>
             )}
             <FilePicker
-              id="new-task-audio"
-              label="Загрузить аудио"
-              accept="audio/*,video/webm"
-              onFiles={(list) => {
-                const file = list[0]
-                if (!file) return
-                addFiles([file])
-                transcribeFile(file).catch(() => undefined)
-              }}
+              id="new-task-images"
+              label="Скриншот"
+              accept="image/*"
+              multiple
+              onFiles={addFiles}
             />
           </div>
-          {transcribing ? <div className="muted">Расшифровываю аудио…</div> : null}
-        </div>
-        <div className="field">
-          <label>Транскрипт</label>
-          <textarea value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder="Появится после записи или загрузки аудио" />
-        </div>
-        <div className="field">
-          <label>Приоритет</label>
-          <select value={priority} onChange={(event) => setPriority(event.target.value as Priority)}>
-            {PRIORITIES.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.title}
-              </option>
-            ))}
-          </select>
-        </div>
-        {error ? <div className="status-error">{error}</div> : null}
-        <div className="row-actions">
-          <button className="btn" type="submit" disabled={busy || !(title || description || files.length || transcript)}>
-            {busy ? 'Сохраняю…' : 'Создать'}
-          </button>
-          <button className="btn secondary" type="button" onClick={onClose}>
-            Отмена
-          </button>
+
+          {transcribing ? <div className="muted">Расшифровываю…</div> : null}
+          {transcript ? <div className="transcript-snip">{transcript}</div> : null}
+          <FilePreview files={files} />
+
+          <details className="more">
+            <summary>Дополнительно</summary>
+            <div className="field">
+              <textarea
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="Описание"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="new-priority">Приоритет</label>
+              <select
+                id="new-priority"
+                value={priority}
+                onChange={(event) => setPriority(event.target.value as Priority)}
+              >
+                {PRIORITIES.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <textarea
+                className="transcript-field"
+                value={transcript}
+                onChange={(event) => setTranscript(event.target.value)}
+                placeholder="Транскрипт"
+              />
+            </div>
+            <div className="row-actions">
+              <FilePicker id="new-task-files" label="Файлы" multiple onFiles={addFiles} />
+              <FilePicker
+                id="new-task-audio"
+                label="Аудиофайл"
+                accept="audio/*,video/webm"
+                onFiles={(list) => {
+                  const file = list[0]
+                  if (!file) return
+                  addFiles([file])
+                  transcribeFile(file).catch(() => undefined)
+                }}
+              />
+            </div>
+          </details>
+          {error ? <div className="status-error">{error}</div> : null}
         </div>
       </form>
+    </div>
+  )
+}
+
+function StatusSeg({
+  value,
+  onChange,
+}: {
+  value: Status
+  onChange: (status: Status) => void
+}) {
+  return (
+    <div className="status-seg" role="group" aria-label="Статус">
+      {STATUSES.map((item) => (
+        <button
+          key={item.id}
+          className={`status-seg-btn ${item.id} ${value === item.id ? 'is-on' : ''}`}
+          type="button"
+          aria-pressed={value === item.id}
+          onClick={() => onChange(item.id)}
+        >
+          {item.title}
+        </button>
+      ))}
     </div>
   )
 }
@@ -473,11 +701,13 @@ function NewTask({
 function TaskDetail({
   task,
   projects,
+  narrow,
   onClose,
   onChange,
 }: {
   task: Task
   projects: string[]
+  narrow: boolean
   onClose: () => void
   onChange: (task: Task) => void
 }) {
@@ -490,7 +720,8 @@ function TaskDetail({
   const [comments, setComments] = useState<Comment[]>([])
   const [comment, setComment] = useState('')
   const [error, setError] = useState('')
-  const [copied, setCopied] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     setTitle(task.title)
@@ -504,64 +735,80 @@ function TaskDetail({
       .catch(() => setComments([]))
   }, [task])
 
-  async function save() {
+  async function patchFields(patch: Parameters<typeof patchTask>[1]) {
     try {
-      const result = await patchTask(task.id, { title, description, transcript, status, priority, project })
+      const result = await patchTask(task.id, patch)
       onChange(result.task)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось сохранить')
     }
   }
 
+  async function save() {
+    setSaving(true)
+    setError('')
+    try {
+      const result = await patchTask(task.id, { title, description, transcript, status, priority, project })
+      onChange(result.task)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function copyPrompt() {
     await navigator.clipboard.writeText(AGENT_PROMPT(task))
-    setCopied('Промпт для агента скопирован')
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
   }
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="panel" onClick={(event) => event.stopPropagation()}>
-        <div className="mono detail-id">{task.id}</div>
-        <a className="muted" href={task.github_url} target="_blank" rel="noreferrer">
-          GitHub Issue
-        </a>
-        <div className="row-actions">
-          <button className="btn" type="button" onClick={copyPrompt}>
-            Скопировать промпт агенту
-          </button>
-          <button className="btn secondary" type="button" onClick={onClose}>
+    <div className={`overlay ${narrow ? 'sheet' : ''}`} onClick={onClose}>
+      <div className={`panel ${narrow ? 'sheet' : 'drawer'}`} onClick={(event) => event.stopPropagation()}>
+        <div className="sheet-head">
+          <button className="btn ghost" type="button" onClick={onClose}>
             Закрыть
           </button>
+          <div className="mono detail-id">{task.id}</div>
+          <button className="btn" type="button" onClick={() => save().catch(() => undefined)} disabled={saving}>
+            {saving ? '…' : 'Сохранить'}
+          </button>
         </div>
-        {copied ? <div className="banner ok">{copied}</div> : null}
-        {task.transcription_error ? <div className="status-error">{task.transcription_error}</div> : null}
-        <div className="field">
-          <label>Название</label>
-          <input value={title} onChange={(event) => setTitle(event.target.value)} />
-        </div>
-        <div className="field">
-          <label>Проект</label>
-          <select value={project} onChange={(event) => setProject(event.target.value)}>
+
+        <StatusSeg
+          value={status}
+          onChange={(next) => {
+            setStatus(next)
+            patchFields({ status: next }).catch(() => undefined)
+          }}
+        />
+
+        <div className="detail-meta">
+          <select
+            value={project}
+            onChange={(event) => {
+              const next = event.target.value
+              setProject(next)
+              patchFields({ project: next }).catch(() => undefined)
+            }}
+            aria-label="Проект"
+          >
             {projects.map((name) => (
               <option key={name} value={name}>
                 {name}
               </option>
             ))}
           </select>
-        </div>
-        <div className="field">
-          <label>Статус</label>
-          <select value={status} onChange={(event) => setStatus(event.target.value as Status)}>
-            {STATUSES.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.title}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
-          <label>Приоритет</label>
-          <select value={priority} onChange={(event) => setPriority(event.target.value as Priority)}>
+          <select
+            value={priority}
+            onChange={(event) => {
+              const next = event.target.value as Priority
+              setPriority(next)
+              patchFields({ priority: next }).catch(() => undefined)
+            }}
+            aria-label="Приоритет"
+          >
             {PRIORITIES.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.title}
@@ -569,33 +816,60 @@ function TaskDetail({
             ))}
           </select>
         </div>
+
+        <div className="row-actions">
+          <button className="btn secondary" type="button" onClick={copyPrompt}>
+            {copied ? 'Скопировано' : 'Промпт агенту'}
+          </button>
+          <a className="quiet-link" href={task.github_url} target="_blank" rel="noreferrer">
+            GitHub
+          </a>
+        </div>
+        {task.transcription_error ? <div className="status-error">{task.transcription_error}</div> : null}
+
         <div className="field">
-          <label>Описание</label>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} />
+          <label htmlFor="task-title">Название</label>
+          <input id="task-title" value={title} onChange={(event) => setTitle(event.target.value)} />
         </div>
         <div className="field">
-          <label>Транскрипт</label>
-          <textarea value={transcript} onChange={(event) => setTranscript(event.target.value)} />
+          <label htmlFor="task-description">Описание</label>
+          <textarea id="task-description" value={description} onChange={(event) => setDescription(event.target.value)} />
         </div>
+        {task.transcript || transcript ? (
+          <div className="field">
+            <label htmlFor="task-transcript">Транскрипт</label>
+            <textarea
+              id="task-transcript"
+              className="transcript-field"
+              value={transcript}
+              onChange={(event) => setTranscript(event.target.value)}
+            />
+          </div>
+        ) : null}
+
         <div className="field attachments">
-          <label>Вложения</label>
-          {task.attachments.length === 0 ? <div className="muted">Нет файлов</div> : null}
-          {task.attachments.map((item) => (
-            <div key={item.filename} className="field">
-              {item.kind === 'image' ? (
-                <img src={attachmentUrl(task.id, item.filename)} alt={item.filename} />
-              ) : null}
-              {item.kind === 'audio' ? (
-                <audio controls src={attachmentUrl(task.id, item.filename)} />
-              ) : null}
-              <a href={attachmentUrl(task.id, item.filename)} target="_blank" rel="noreferrer">
-                {item.filename}
-              </a>
-            </div>
-          ))}
+          {task.attachments.length === 0 ? null : (
+            task.attachments.map((item) => (
+              <div key={item.filename} className="attach-item">
+                {item.kind === 'image' ? (
+                  <a href={attachmentUrl(task.id, item.filename)} target="_blank" rel="noreferrer">
+                    <img src={attachmentUrl(task.id, item.filename)} alt={item.filename} />
+                  </a>
+                ) : null}
+                {item.kind === 'audio' ? (
+                  <audio controls src={attachmentUrl(task.id, item.filename)} />
+                ) : null}
+                {item.kind !== 'image' ? (
+                  <a href={attachmentUrl(task.id, item.filename)} target="_blank" rel="noreferrer">
+                    {item.filename}
+                  </a>
+                ) : null}
+              </div>
+            ))
+          )}
           <FilePicker
             id={`task-files-${task.id}`}
-            label="Добавить файлы"
+            label="Добавить"
             multiple
             onFiles={async (list) => {
               const result = await addAttachments(task.id, Array.from(list))
@@ -604,21 +878,20 @@ function TaskDetail({
           />
         </div>
         {error ? <div className="status-error">{error}</div> : null}
-        <div className="row-actions">
-          <button className="btn" type="button" onClick={() => save().catch(() => undefined)}>
-            Сохранить
-          </button>
-        </div>
-        <h3>Комментарии</h3>
-        {comments.map((item) => (
-          <div className="comment" key={`${item.created_at}-${item.body}`}>
-            <div className="muted">
-              {item.author} · {item.created_at.slice(0, 16).replace('T', ' ')}
-            </div>
-            <div>{item.body}</div>
+
+        {comments.length ? (
+          <div className="comment-list">
+            {comments.map((item) => (
+              <div className="comment" key={`${item.created_at}-${item.body}`}>
+                <div className="muted">
+                  {item.author} · {item.created_at.slice(0, 16).replace('T', ' ')}
+                </div>
+                <div>{item.body}</div>
+              </div>
+            ))}
           </div>
-        ))}
-        <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Комментарий в GitHub Issue" />
+        ) : null}
+        <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Комментарий" />
         <div className="row-actions">
           <button
             className="btn secondary"
@@ -630,7 +903,7 @@ function TaskDetail({
               setComment('')
             }}
           >
-            Добавить комментарий
+            Добавить
           </button>
         </div>
       </div>
@@ -672,15 +945,33 @@ function FilePicker({
 }
 
 function FilePreview({ files }: { files: File[] }) {
+  const items = useMemo(
+    () =>
+      files.map((file, index) => ({
+        file,
+        index,
+        url: file.type.startsWith('image/') ? URL.createObjectURL(file) : '',
+      })),
+    [files],
+  )
+
+  useEffect(() => {
+    return () => {
+      for (const item of items) {
+        if (item.url) URL.revokeObjectURL(item.url)
+      }
+    }
+  }, [items])
+
   if (!files.length) return null
   return (
     <div className="preview-grid">
-      {files.map((file, index) =>
-        file.type.startsWith('image/') ? (
-          <img key={`${file.name}-${index}`} src={URL.createObjectURL(file)} alt={file.name} />
+      {items.map((item) =>
+        item.url ? (
+          <img key={`${item.file.name}-${item.index}`} src={item.url} alt={item.file.name} />
         ) : (
-          <div className="file-chip" key={`${file.name}-${index}`}>
-            {file.name}
+          <div className="file-chip" key={`${item.file.name}-${item.index}`}>
+            {item.file.name}
           </div>
         ),
       )}
