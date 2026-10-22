@@ -52,8 +52,8 @@ chmod 600 "${ACCESS_FILE}"
 docker network inspect "${NETWORK}" >/dev/null 2>&1 \
     || docker network create "${NETWORK}" >/dev/null
 
-docker build --tag "${API_IMAGE}" "${PROJECT_ROOT}/backend"
-docker build --tag "${WEB_IMAGE}" "${PROJECT_ROOT}/frontend"
+docker build --pull --tag "${API_IMAGE}" "${PROJECT_ROOT}/backend"
+docker build --pull --tag "${WEB_IMAGE}" "${PROJECT_ROOT}/frontend"
 
 docker rm --force "${TUNNEL_CONTAINER}" "${WEB_CONTAINER}" "${API_CONTAINER}" \
     >/dev/null 2>&1 || true
